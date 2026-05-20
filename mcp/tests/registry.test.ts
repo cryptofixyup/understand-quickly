@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 
 import {
   clearCache,
+  clearStatsCache,
   filterEntries,
   loadRegistry,
+  loadStats,
 } from "../src/registry.ts";
-import type { FetchImpl, Registry, RegistryEntry } from "../src/types.ts";
+import type { FetchImpl, Registry, RegistryEntry, StatsJson } from "../src/types.ts";
 
 const SOURCE = "https://example.invalid/registry.json";
 
@@ -100,7 +102,7 @@ describe("loadRegistry caching", () => {
     assert.equal(counter.calls, 2, "expired cache should trigger a refetch");
   });
 
-  it("throws when the upstream registry returns non-ok", async () => {
+  it("throws when the upstream registry returns non-ok and no cache exists", async () => {
     const counter = { calls: 0 };
     const registry = makeRegistry();
     const fetchImpl = makeFakeFetch(registry, counter, {
@@ -118,6 +120,29 @@ describe("loadRegistry caching", () => {
         }),
       /Failed to fetch registry/,
     );
+  });
+
+  it("returns stale cache when a 5xx occurs and a prior entry exists", async () => {
+    const counter = { calls: 0 };
+    const registry = makeRegistry();
+    let nowValue = 1_000_000;
+    const now = () => nowValue;
+
+    // Seed the cache with a successful fetch.
+    const okFetch = makeFakeFetch(registry, counter);
+    await loadRegistry({ source: SOURCE, fetchImpl: okFetch, ttlMs: 60_000, now });
+
+    // Advance past TTL so the next call tries to refetch, then return 5xx.
+    nowValue = 1_000_000 + 61_000;
+    const failFetch = makeFakeFetch(registry, counter, { ok: false, status: 503 });
+    const result = await loadRegistry({
+      source: SOURCE,
+      fetchImpl: failFetch,
+      ttlMs: 60_000,
+      now,
+    });
+
+    assert.equal(result, registry, "stale cache should be returned on 5xx");
   });
 });
 
@@ -167,5 +192,102 @@ describe("filterEntries", () => {
   it("returns an empty list when nothing matches", () => {
     const out = filterEntries(registry.entries, (e) => e.format === "nope");
     assert.equal(out.length, 0);
+  });
+});
+
+const STATS_SOURCE = "https://example.invalid/stats.json";
+
+function makeStats(extras: Partial<StatsJson> = {}): StatsJson {
+  return {
+    schema_version: 1,
+    generated_at: "2026-05-07T00:00:00Z",
+    concepts: [
+      { term: "authentication", entries: 3, samples: ["alice/repo"] },
+      { term: "routing", entries: 2, samples: ["bob/repo"] },
+    ],
+    ...extras,
+  };
+}
+
+function makeFakeStatsFetch(
+  stats: StatsJson,
+  counter: { calls: number },
+  overrides: Partial<{ ok: boolean; status: number }> = {},
+): FetchImpl {
+  return async () => {
+    counter.calls += 1;
+    return {
+      ok: overrides.ok ?? true,
+      status: overrides.status ?? 200,
+      statusText: "OK",
+      json: async () => stats,
+      text: async () => JSON.stringify(stats),
+    };
+  };
+}
+
+describe("loadStats caching", () => {
+  beforeEach(() => clearStatsCache());
+
+  it("fetches once and serves a cache hit on the second call", async () => {
+    const counter = { calls: 0 };
+    const stats = makeStats();
+    const fetchImpl = makeFakeStatsFetch(stats, counter);
+    const now = () => 1_000_000;
+
+    const first = await loadStats({ source: STATS_SOURCE, fetchImpl, ttlMs: 60_000, now });
+    const second = await loadStats({ source: STATS_SOURCE, fetchImpl, ttlMs: 60_000, now });
+
+    assert.equal(counter.calls, 1, "second call should be served from cache");
+    assert.equal(first, second, "both loads should return the same object");
+  });
+
+  it("refetches after the cache TTL expires", async () => {
+    const counter = { calls: 0 };
+    const stats = makeStats();
+    const fetchImpl = makeFakeStatsFetch(stats, counter);
+
+    let nowValue = 1_000_000;
+    const now = () => nowValue;
+
+    await loadStats({ source: STATS_SOURCE, fetchImpl, ttlMs: 60_000, now });
+    nowValue = 1_000_000 + 61_000;
+    await loadStats({ source: STATS_SOURCE, fetchImpl, ttlMs: 60_000, now });
+
+    assert.equal(counter.calls, 2, "expired cache should trigger a refetch");
+  });
+
+  it("throws when the upstream stats returns non-ok and no cache exists", async () => {
+    const counter = { calls: 0 };
+    const stats = makeStats();
+    const fetchImpl = makeFakeStatsFetch(stats, counter, { ok: false, status: 503 });
+
+    await assert.rejects(
+      () => loadStats({ source: STATS_SOURCE, fetchImpl, ttlMs: 60_000, now: () => 1 }),
+      /Failed to fetch stats/,
+    );
+  });
+
+  it("returns stale cache when a 5xx occurs and a prior entry exists", async () => {
+    const counter = { calls: 0 };
+    const stats = makeStats();
+    let nowValue = 1_000_000;
+    const now = () => nowValue;
+
+    // Seed the cache with a successful fetch.
+    const okFetch = makeFakeStatsFetch(stats, counter);
+    await loadStats({ source: STATS_SOURCE, fetchImpl: okFetch, ttlMs: 60_000, now });
+
+    // Advance past TTL so the next call tries to refetch, then return 5xx.
+    nowValue = 1_000_000 + 61_000;
+    const failFetch = makeFakeStatsFetch(stats, counter, { ok: false, status: 503 });
+    const result = await loadStats({
+      source: STATS_SOURCE,
+      fetchImpl: failFetch,
+      ttlMs: 60_000,
+      now,
+    });
+
+    assert.equal(result, stats, "stale cache should be returned on 5xx");
   });
 });
