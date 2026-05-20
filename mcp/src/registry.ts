@@ -136,6 +136,9 @@ export async function loadStats(
 
   const response = await fetchImpl(source);
   if (!response.ok) {
+    // 5xx is transient; prefer stale cache over a hard throw so an upstream
+    // outage doesn't break callers that have seen at least one successful fetch.
+    if (response.status >= 500 && cached) return cached.stats;
     throw new Error(
       `Failed to fetch stats from ${source}: ${response.status} ${response.statusText}`,
     );
