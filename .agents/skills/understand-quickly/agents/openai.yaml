@@ -1,0 +1,6 @@
+interface:
+  display_name: "Understand Quickly"
+  short_description: "Repo-specific patterns and workflows for understand-quickly"
+  default_prompt: "Use the understand-quickly repo skill to follow existing architecture, testing, and workflow conventions."
+policy:
+  allow_implicit_invocation: true
