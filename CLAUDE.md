@@ -15,6 +15,8 @@ nvm use              # pin to Node 20 (see .nvmrc)
 npm install
 npm test             # node:test on scripts/__tests__/*.test.mjs
 npm run test:coverage  # same + c8 gates (≥90% lines/functions, ≥80% branches)
+node --test scripts/__tests__/validate.test.mjs  # run a single test file
+node --test --test-name-pattern "duplicate id" scripts/__tests__/validate.test.mjs  # filter by name
 npm run validate     # validate registry.json shape + fetch+validate each graph URL
 npm run smoke        # dry-run sync against tests/registry-smoke.json (offline-friendly)
 npm run sync         # resync all entries, writes registry.json
